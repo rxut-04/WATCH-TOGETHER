@@ -263,18 +263,14 @@ export function VideoPlayer({
       onMouseLeave={() => setShowControls(false)}
       onMouseEnter={scheduleHide}
     >
-      {/* Host video — must stay rendered (not display:none) so captureStream() keeps producing frames */}
+      {/* Hidden host video (source of captureStream) */}
       {role === 'host' && (
         <video
           ref={videoRef as React.RefObject<HTMLVideoElement>}
           className="w-full h-full object-contain"
           playsInline
           preload="auto"
-          style={{
-            opacity: videoFileName ? 1 : 0,
-            position: videoFileName ? 'relative' : 'absolute',
-            pointerEvents: videoFileName ? 'auto' : 'none',
-          }}
+          style={{ display: videoFileName ? 'block' : 'none' }}
         />
       )}
 
