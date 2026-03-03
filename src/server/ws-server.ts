@@ -208,7 +208,7 @@ export function startWsServer() {
 
   const WS_PORT = Number(process.env.WS_PORT ?? 3001)
 
-  standaloneServer = Bun.serve<WsData, undefined>({
+  standaloneServer = Bun.serve<WsData>({
     port: WS_PORT,
     hostname: '::',
 

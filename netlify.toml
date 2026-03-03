@@ -1,12 +1,12 @@
-# Netlify: npm run build, publish dist/client
-# For full SSR: use @netlify/vite-plugin-tanstack-start per TanStack docs
+# Netlify: TanStack Start with @netlify/vite-plugin-tanstack-start
 [build]
   command = "npm run build"
   publish = "dist/client"
 
 [build.environment]
-  NODE_VERSION = "20"
+  NODE_VERSION = "22"
 
+# SPA fallback so client-side routes work
 [[redirects]]
   from = "/*"
   to = "/index.html"

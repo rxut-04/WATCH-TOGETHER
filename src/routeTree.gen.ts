@@ -100,6 +100,7 @@ const ApiSignalRoomIdRoute = ApiSignalRoomIdRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
+  '/': typeof PublicIndexRoute
   '/hello': typeof ApiHelloRoute
   '/og': typeof ApiOgRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
@@ -108,12 +109,12 @@ export interface FileRoutesByFullPath {
   '/sign-out': typeof AuthSignOutRoute
   '/sign-up': typeof AuthSignUpRoute
   '/example-protected-route': typeof ProtectedExampleProtectedRouteRoute
-  '/': typeof PublicIndexRoute
   '/signal/$roomId': typeof ApiSignalRoomIdRoute
   '/ws-room/$roomId': typeof ApiWsRoomRoomIdRoute
   '/room/$roomId': typeof PublicRoomRoomIdRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof PublicIndexRoute
   '/hello': typeof ApiHelloRoute
   '/og': typeof ApiOgRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
@@ -122,7 +123,6 @@ export interface FileRoutesByTo {
   '/sign-out': typeof AuthSignOutRoute
   '/sign-up': typeof AuthSignUpRoute
   '/example-protected-route': typeof ProtectedExampleProtectedRouteRoute
-  '/': typeof PublicIndexRoute
   '/signal/$roomId': typeof ApiSignalRoomIdRoute
   '/ws-room/$roomId': typeof ApiWsRoomRoomIdRoute
   '/room/$roomId': typeof PublicRoomRoomIdRoute
@@ -148,6 +148,7 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/'
     | '/hello'
     | '/og'
     | '/forgot-password'
@@ -156,12 +157,12 @@ export interface FileRouteTypes {
     | '/sign-out'
     | '/sign-up'
     | '/example-protected-route'
-    | '/'
     | '/signal/$roomId'
     | '/ws-room/$roomId'
     | '/room/$roomId'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/hello'
     | '/og'
     | '/forgot-password'
@@ -170,7 +171,6 @@ export interface FileRouteTypes {
     | '/sign-out'
     | '/sign-up'
     | '/example-protected-route'
-    | '/'
     | '/signal/$roomId'
     | '/ws-room/$roomId'
     | '/room/$roomId'
@@ -208,21 +208,21 @@ declare module '@tanstack/react-router' {
     '/_public': {
       id: '/_public'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof PublicRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_protected': {
       id: '/_protected'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof ProtectedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth': {
       id: '/_auth'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -368,12 +368,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}
