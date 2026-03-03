@@ -98,8 +98,6 @@ export function useCinemaRoom({
   const localVideoStreamRef = useRef<MediaStream | null>(null)
   const voiceStreamRef = useRef<MediaStream | null>(null)
   const cameraStreamRef = useRef<MediaStream | null>(null)
-  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const animFrameRef = useRef<number>(0)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const micGainRef = useRef<GainNode | null>(null)
   const localGainRef = useRef<GainNode | null>(null) // host's local playback volume (movie in their ears)
@@ -449,7 +447,13 @@ export function useCinemaRoom({
       const freshStream = new MediaStream([...videoTracks, ...audioTracks])
       remoteFilmStreamRef.current = freshStream
       console.log('[CinemaSync] Dispatching remoteStream with', freshStream.getTracks().length, 'tracks')
-      patch({ remoteStream: freshStream })
+      // Viewer: mark peer connected as soon as we have media (seamless UI, no "Awaiting host" once stream is live)
+      if (roleRef.current === 'viewer') {
+        patch({ remoteStream: freshStream, peerConnected: true })
+        peerConnectedRef.current = true
+      } else {
+        patch({ remoteStream: freshStream })
+      }
     }
 
     if (roleRef.current === 'host') {
@@ -722,79 +726,47 @@ export function useCinemaRoom({
         connectVideoAudio(vid)
       }
 
-      // ── Canvas-based video capture (more reliable than videoElement.captureStream) ──
-      // Some browsers don't produce video frames from captureStream when the element
-      // was hidden (display:none) or after createMediaElementSource was called.
-      // Drawing to a canvas and capturing that stream is universally reliable.
-
-      cancelAnimationFrame(animFrameRef.current)
-
-      let canvas = captureCanvasRef.current
-      if (canvas) {
-        canvas.remove()
+      // ── captureStream() from the video element ──
+      // captureStream() captures directly from the video decoder pipeline.
+      // Unlike canvas-based capture, it keeps producing frames even when the
+      // host tab is in the background (requestAnimationFrame stops in bg tabs).
+      const captureEl = vid as HTMLVideoElement & {
+        captureStream?: () => MediaStream
+        mozCaptureStream?: () => MediaStream
       }
-      canvas = document.createElement('canvas')
-      canvas.style.cssText = 'position:fixed;top:-9999px;left:-9999px;pointer-events:none;'
-      document.body.appendChild(canvas)
-      captureCanvasRef.current = canvas
+      const videoStream =
+        captureEl.captureStream?.() ?? captureEl.mozCaptureStream?.()
 
-      const cw = vid.videoWidth || 1920
-      const ch = vid.videoHeight || 1080
-      canvas.width = cw
-      canvas.height = ch
-      const ctx2d = canvas.getContext('2d')!
-
-      // Draw the first frame immediately so the stream has content
-      ctx2d.drawImage(vid, 0, 0, cw, ch)
-
-      // Continuous draw loop — runs at display refresh rate, captureStream limits to 30fps
-      const drawLoop = () => {
-        if (vid.readyState >= 2) {
-          ctx2d.drawImage(vid, 0, 0, cw, ch)
-        }
-        animFrameRef.current = requestAnimationFrame(drawLoop)
-      }
-      animFrameRef.current = requestAnimationFrame(drawLoop)
-
-      const canvasStream = (canvas as HTMLCanvasElement & {
-        captureStream?: (fps?: number) => MediaStream
-      }).captureStream?.(30)
-
-      if (!canvasStream) {
-        console.error('[CinemaSync] canvas.captureStream() not supported')
+      if (!videoStream) {
+        console.error('[CinemaSync] captureStream() not supported — use Chrome/Edge')
         return
       }
 
-      // Wait until the canvas stream's video track is live
+      // Wait until the video track is live (can take a frame or two)
       await new Promise<void>((res) => {
         const check = () => {
-          const vt = canvasStream.getVideoTracks()
+          const vt = videoStream.getVideoTracks()
           if (vt.length > 0 && vt[0].readyState === 'live') return res()
           setTimeout(check, 80)
         }
         check()
       })
 
-      console.log('[CinemaSync] Canvas capture started:', cw, 'x', ch)
+      console.log('[CinemaSync] captureStream started:', vid.videoWidth, 'x', vid.videoHeight)
 
       const outStream = new MediaStream()
 
-      for (const t of canvasStream.getVideoTracks()) outStream.addTrack(t)
+      // Video track from captureStream (works in background tabs)
+      for (const t of videoStream.getVideoTracks()) outStream.addTrack(t)
 
+      // Audio: prefer AudioContext mixed destination (includes mic for PTT)
       if (mixedDestRef.current) {
         const audioTracks = mixedDestRef.current.stream.getAudioTracks()
         console.log('[CinemaSync] AudioContext audio tracks:', audioTracks.length, audioTracks[0]?.readyState)
         for (const t of audioTracks) outStream.addTrack(t)
       } else {
-        console.warn('[CinemaSync] No AudioContext — falling back to element audio')
-        const captureEl = vid as HTMLVideoElement & {
-          captureStream?: () => MediaStream
-          mozCaptureStream?: () => MediaStream
-        }
-        const elStream = captureEl.captureStream?.() ?? captureEl.mozCaptureStream?.()
-        if (elStream) {
-          for (const t of elStream.getAudioTracks()) outStream.addTrack(t)
-        }
+        console.warn('[CinemaSync] No AudioContext — falling back to captureStream audio')
+        for (const t of videoStream.getAudioTracks()) outStream.addTrack(t)
       }
 
       console.log(
@@ -1038,9 +1010,6 @@ export function useCinemaRoom({
     return () => {
       mountedRef.current = false
       if (pollTimer.current) clearTimeout(pollTimer.current)
-      cancelAnimationFrame(animFrameRef.current)
-      captureCanvasRef.current?.remove()
-      captureCanvasRef.current = null
 
       postSignal({ type: 'leave' })
 

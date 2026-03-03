@@ -64,6 +64,7 @@ export function VideoPlayer({
   const [isDragging, setIsDragging] = useState(false)
   const [needsUnmute, setNeedsUnmute] = useState(true)
   const [debugInfo, setDebugInfo] = useState('')
+  const [fullscreenActive, setFullscreenActive] = useState(false)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -206,14 +207,53 @@ export function VideoPlayer({
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0
 
   const handleFullscreen = useCallback(() => {
-    const el = stageRef.current
+    const vid = role === 'viewer' ? viewerVideoRef.current : null
+    const doc = document as Document & { fullscreenElement?: Element; exitFullscreen?: () => Promise<void> }
+    const root = doc.fullscreenElement ?? (document as unknown as { webkitFullscreenElement?: Element }).webkitFullscreenElement
+    if (root) {
+      doc.exitFullscreen?.() ?? (document as unknown as { webkitExitFullscreen?: () => void }).webkitExitFullscreen?.()
+      return
+    }
+    // Prefer video element for viewer (native fullscreen where supported), else stage
+    const el = (role === 'viewer' && vid) ? vid : stageRef.current
     if (!el) return
-    if (!document.fullscreenElement) {
-      el.requestFullscreen?.() ?? (el as HTMLElement & { webkitRequestFullscreen?: () => void }).webkitRequestFullscreen?.()
-    } else {
-      document.exitFullscreen?.()
+    const req = (el as HTMLElement).requestFullscreen?.() ?? (el as HTMLElement & { webkitRequestFullscreen?: () => void }).webkitRequestFullscreen?.()
+    if (req && typeof (req as Promise<unknown>)?.then === 'function') {
+      (req as Promise<void>).catch(() => {
+        // Fallback: try stage so fullscreen isn't stuck
+        const stage = stageRef.current
+        if (stage && role === 'viewer') stage.requestFullscreen?.() ?? (stage as HTMLElement & { webkitRequestFullscreen?: () => void }).webkitRequestFullscreen?.()
+      })
+    }
+  }, [role])
+
+  // Fullscreen change: keep state in sync so exit works and UI doesn't get stuck
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const doc = document as Document & { fullscreenElement?: Element }
+      const full = !!doc.fullscreenElement || !!(document as unknown as { webkitFullscreenElement?: Element }).webkitFullscreenElement
+      setFullscreenActive(full)
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange)
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
     }
   }, [])
+
+  // When tab becomes visible again, resume viewer video so it doesn't stay "in background"
+  useEffect(() => {
+    if (role !== 'viewer') return
+    const onVisible = () => {
+      const vid = viewerVideoRef.current
+      if (vid && document.visibilityState === 'visible') {
+        vid.play().catch(() => {})
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [role])
 
   return (
     <div
@@ -223,28 +263,47 @@ export function VideoPlayer({
       onMouseLeave={() => setShowControls(false)}
       onMouseEnter={scheduleHide}
     >
-      {/* Hidden host video (source of captureStream) */}
+      {/* Host video — must stay rendered (not display:none) so captureStream() keeps producing frames */}
       {role === 'host' && (
         <video
           ref={videoRef as React.RefObject<HTMLVideoElement>}
           className="w-full h-full object-contain"
           playsInline
           preload="auto"
-          style={{ display: videoFileName ? 'block' : 'none' }}
+          style={{
+            opacity: videoFileName ? 1 : 0,
+            position: videoFileName ? 'relative' : 'absolute',
+            pointerEvents: videoFileName ? 'auto' : 'none',
+          }}
         />
       )}
 
-      {/* Viewer video */}
+      {/* Viewer video — explicit layer so it stays visible (not treated as background) when switching tabs/fullscreen */}
       {role === 'viewer' && (
         <>
-          <video
-            ref={viewerVideoRef}
-            className="w-full h-full object-contain bg-black"
-            playsInline
-            autoPlay
-            muted
-          />
-          {debugInfo && (
+          <div
+            className="absolute inset-0 z-0"
+            style={{
+              transform: 'translateZ(0)',
+              WebkitTransform: 'translateZ(0)',
+              backfaceVisibility: 'hidden' as const,
+            }}
+            aria-hidden
+          >
+            <video
+              ref={viewerVideoRef}
+              className="absolute inset-0 w-full h-full object-contain bg-black"
+              style={{
+                transform: 'translateZ(0)',
+                WebkitTransform: 'translateZ(0)',
+                objectFit: 'contain',
+              }}
+              playsInline
+              autoPlay
+              muted
+            />
+          </div>
+          {debugInfo && debugInfo.startsWith('0x0') && (
             <div style={{
               position: 'absolute', top: 4, left: 4,
               background: 'rgba(0,0,0,0.7)', color: '#0f0',
@@ -280,6 +339,20 @@ export function VideoPlayer({
         </button>
       )}
 
+      {/* Viewer: exit fullscreen hint when stuck in fullscreen */}
+      {role === 'viewer' && fullscreenActive && (
+        <button
+          type="button"
+          onClick={() => {
+            const doc = document as Document & { exitFullscreen?: () => Promise<void> }
+            doc.exitFullscreen?.() ?? (document as unknown as { webkitExitFullscreen?: () => void }).webkitExitFullscreen?.()
+          }}
+          className="absolute top-4 left-4 z-50 px-3 py-1.5 rounded bg-black/70 text-amber-100/90 font-mono text-xs tracking-wider hover:bg-black/90"
+        >
+          Tap to exit fullscreen
+        </button>
+      )}
+
       {/* No video selected – host upload prompt */}
       {role === 'host' && !videoFileName && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 z-10">
@@ -308,8 +381,8 @@ export function VideoPlayer({
         </div>
       )}
 
-      {/* Viewer waiting for stream */}
-      {role === 'viewer' && !peerConnected && (
+      {/* Viewer waiting for stream — hide as soon as we have video tracks (seamless) */}
+      {role === 'viewer' && !peerConnected && !(remoteStream?.getVideoTracks().length) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10">
           <div className="w-8 h-8 border border-amber-500/40 border-t-amber-400 rounded-full animate-spin" />
           <p className="font-mono text-xs text-amber-100/40 tracking-widest uppercase">
@@ -319,7 +392,7 @@ export function VideoPlayer({
       )}
 
       {/* Viewer: peer connected but no stream yet */}
-      {role === 'viewer' && peerConnected && !remoteStream && (
+      {role === 'viewer' && peerConnected && !(remoteStream?.getVideoTracks().length) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10">
           <p className="font-mono text-xs text-amber-100/40 tracking-widest uppercase">
             Host is selecting a film…
@@ -605,8 +678,8 @@ export function VideoPlayer({
             </span>
           )}
 
-          {/* Viewer: fullscreen + volume (local-only, no sync impact) */}
-          {role === 'viewer' && peerConnected && remoteStream && (
+          {/* Viewer: fullscreen + volume (show when we have stream for seamless UX) */}
+          {role === 'viewer' && (peerConnected || remoteStream?.getVideoTracks().length) && remoteStream && (
             <>
               <input
                 type="range"
@@ -631,7 +704,7 @@ export function VideoPlayer({
           )}
 
           {/* Viewer label when no stream yet */}
-          {role === 'viewer' && (!peerConnected || !remoteStream) && (
+          {role === 'viewer' && (!peerConnected || !(remoteStream?.getVideoTracks().length)) && (
             <span className="font-mono text-xs text-amber-100/20 tracking-widest uppercase">
               Host controls
             </span>
