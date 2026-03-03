@@ -6,8 +6,8 @@
 [build.environment]
   NODE_VERSION = "22"
 
-# SPA fallback so client-side routes work
+# SPA mode: serve shell for all routes (no hydration)
 [[redirects]]
   from = "/*"
-  to = "/index.html"
+  to = "/_shell.html"
   status = 200

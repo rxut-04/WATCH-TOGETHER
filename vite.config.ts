@@ -15,7 +15,9 @@ const config = defineConfig({
       projects: ['./tsconfig.json'],
     }),
     tailwindcss(),
-    tanstackStart(),
+    tanstackStart({
+      spa: { enabled: true },
+    }),
     forSites &&
       nitroV2Plugin({
         compatibilityDate: '2025-10-08',
