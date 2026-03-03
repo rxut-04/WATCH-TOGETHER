@@ -52,9 +52,7 @@ export function VideoPlayer({
   onFullscreen,
   peerConnected,
 }: VideoPlayerProps) {
-  const remoteVideoRef = useRef<HTMLVideoElement>(null)
-  const remoteAudioRef = useRef<HTMLAudioElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const viewerVideoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const [duration, setDuration] = useState(0)
   const [viewerVolume, setViewerVolume] = useState(1)
@@ -64,97 +62,81 @@ export function VideoPlayer({
   const [speedOpen, setSpeedOpen] = useState(false)
   const [audioTrackOpen, setAudioTrackOpen] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
-  const [needsUnmute, setNeedsUnmute] = useState(false)
+  const [needsUnmute, setNeedsUnmute] = useState(true)
+  const [debugInfo, setDebugInfo] = useState('')
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const unlockAudio = useCallback(() => {
-    const audio = remoteAudioRef.current
-    if (audio) {
-      audio.muted = false
-      audio.volume = 1.0
-      audio.play().catch(() => null)
+    const vid = viewerVideoRef.current
+    if (vid) {
+      vid.muted = false
+      vid.volume = 1.0
+      vid.play().catch(() => null)
     }
     setNeedsUnmute(false)
   }, [])
 
-  // Canvas-based video display: draw video frames to canvas. Bypasses browser bugs
-  // where <video> with WebRTC stream shows audio but no video.
+  // Assign full stream to video element
   useEffect(() => {
-    if (!remoteStream) return
-    const videoTracks = remoteStream.getVideoTracks()
-    const audioTracks = remoteStream.getAudioTracks()
-    videoTracks.forEach((t) => { t.enabled = true })
-    audioTracks.forEach((t) => { t.enabled = true })
+    const vid = viewerVideoRef.current
+    if (!vid || !remoteStream || role !== 'viewer') return
 
-    const vid = remoteVideoRef.current
-    const canvas = canvasRef.current
-    if (vid && canvas && videoTracks.length > 0) {
-      vid.srcObject = new MediaStream(videoTracks)
-      vid.muted = true
-      vid.playsInline = true
-      vid.load()
-      vid.play().catch(() => null)
+    const vTracks = remoteStream.getVideoTracks()
+    const aTracks = remoteStream.getAudioTracks()
+    console.log(`[VideoPlayer] Setting srcObject: ${vTracks.length} video, ${aTracks.length} audio`)
+    vTracks.forEach((t) => {
+      t.enabled = true
+      console.log(`[VideoPlayer] Video track: ${t.id} state=${t.readyState} enabled=${t.enabled}`, t.getSettings())
+    })
 
-      const ctx = canvas.getContext('2d', { alpha: false })
-      if (!ctx) return
+    vid.srcObject = remoteStream
+    vid.muted = true
 
-      let rafId: number
-      const dpr = Math.min(window.devicePixelRatio ?? 1, 2)
-      const draw = () => {
-        const r = canvas.getBoundingClientRect()
-        if (vid.readyState >= 2 && vid.videoWidth > 0 && vid.videoHeight > 0 && r.width > 0 && r.height > 0) {
-          const w = Math.floor(r.width * dpr)
-          const h = Math.floor(r.height * dpr)
-          if (canvas.width !== w || canvas.height !== h) {
-            canvas.width = w
-            canvas.height = h
-          }
-          const vidAspect = vid.videoWidth / vid.videoHeight
-          const canAspect = w / h
-          let sx = 0, sy = 0, sw = vid.videoWidth, sh = vid.videoHeight
-          if (canAspect > vidAspect) {
-            sh = vid.videoWidth / canAspect
-            sy = (vid.videoHeight - sh) / 2
-          } else {
-            sw = vid.videoHeight * canAspect
-            sx = (vid.videoWidth - sw) / 2
-          }
-          ctx.drawImage(vid, sx, sy, sw, sh, 0, 0, w, h)
-        }
-        rafId = requestAnimationFrame(draw)
-      }
-      draw()
-      return () => cancelAnimationFrame(rafId)
+    const tryPlay = () => {
+      vid.play().then(() => {
+        console.log('[VideoPlayer] play() succeeded', vid.videoWidth, 'x', vid.videoHeight)
+      }).catch((e) => {
+        console.warn('[VideoPlayer] play() failed:', e)
+      })
     }
 
-    const audio = remoteAudioRef.current
-    if (audio && audioTracks.length > 0) {
-      audio.srcObject = new MediaStream(audioTracks)
-      audio.load()
-      const isMobile =
-        /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-        navigator.maxTouchPoints > 2 || window.innerWidth < 768
-      if (isMobile) {
-        audio.muted = true
-        audio.play().then(() => setNeedsUnmute(true)).catch(() => setNeedsUnmute(true))
-      } else {
-        audio.muted = false
-        audio.volume = 1.0
-        audio.play().catch(() => {
-          audio.muted = true
-          audio.play().catch(() => null)
-          setNeedsUnmute(true)
-        })
-      }
+    vid.onloadedmetadata = () => {
+      console.log('[VideoPlayer] loadedmetadata', vid.videoWidth, 'x', vid.videoHeight)
+      tryPlay()
     }
-  }, [remoteStream])
+    vid.onresize = () => {
+      console.log('[VideoPlayer] resize', vid.videoWidth, 'x', vid.videoHeight)
+    }
 
-  // Viewer: apply local volume to audio element
+    tryPlay()
+    setTimeout(tryPlay, 500)
+    setTimeout(tryPlay, 2000)
+    setNeedsUnmute(true)
+  }, [role, remoteStream])
+
+  // Diagnostic: poll video element state and show overlay
+  useEffect(() => {
+    if (role !== 'viewer' || !remoteStream) return
+    const iv = setInterval(() => {
+      const vid = viewerVideoRef.current
+      if (!vid) return
+      const vt = remoteStream.getVideoTracks()[0]
+      const info = [
+        `${vid.videoWidth}x${vid.videoHeight}`,
+        `ready=${vid.readyState}`,
+        vid.paused ? 'PAUSED' : 'playing',
+        vt ? `trk=${vt.readyState}` : 'no-trk',
+      ].join(' | ')
+      setDebugInfo(info)
+    }, 1000)
+    return () => clearInterval(iv)
+  }, [role, remoteStream])
+
   useEffect(() => {
     if (role !== 'viewer') return
-    const audio = remoteAudioRef.current
-    if (audio) audio.volume = viewerVolume
+    const vid = viewerVideoRef.current
+    if (vid) vid.volume = viewerVolume
   }, [role, viewerVolume])
 
   // Mirror syncState for viewer display
@@ -252,31 +234,26 @@ export function VideoPlayer({
         />
       )}
 
-      {/* Viewer: canvas (drawn from hidden video) + audio. Canvas bypasses browser video display bugs. */}
+      {/* Viewer video */}
       {role === 'viewer' && (
         <>
           <video
-            ref={remoteVideoRef}
-            key={remoteStream ? `v-${remoteStream.id}` : 'no-video'}
+            ref={viewerVideoRef}
+            className="w-full h-full object-contain bg-black"
             playsInline
             autoPlay
             muted
-            style={{ position: 'absolute', left: -9999, width: 640, height: 360 }}
           />
-          <canvas
-            ref={canvasRef}
-            key={remoteStream ? `c-${remoteStream.id}` : 'no-canvas'}
-            className="w-full h-full object-contain bg-black"
-            style={{ maxHeight: '100%', width: '100%', display: 'block' }}
-          />
-          <audio
-            ref={remoteAudioRef}
-            key={remoteStream ? `a-${remoteStream.id}` : 'no-audio'}
-            autoPlay
-            playsInline
-            muted={needsUnmute}
-            style={{ display: 'none' }}
-          />
+          {debugInfo && (
+            <div style={{
+              position: 'absolute', top: 4, left: 4,
+              background: 'rgba(0,0,0,0.7)', color: '#0f0',
+              fontSize: 11, padding: '2px 6px', borderRadius: 4,
+              fontFamily: 'monospace', zIndex: 50, pointerEvents: 'none',
+            }}>
+              {debugInfo}
+            </div>
+          )}
         </>
       )}
 
